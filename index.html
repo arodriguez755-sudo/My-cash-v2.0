@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0f766e">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<title>Mis Finanzas</title>
+<style>
+:root{--bg:#f4f6f5;--card:#fff;--tx:#14201d;--mut:#62726d;--pri:#0f766e;--in:#15803d;--out:#b91c1c;--warn:#b45309;--bd:#dfe6e3}
+@media(prefers-color-scheme:dark){:root{--bg:#0e1514;--card:#17211f;--tx:#e6efec;--mut:#93a5a0;--pri:#2dd4bf;--in:#4ade80;--out:#f87171;--warn:#fbbf24;--bd:#27342f}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font:16px/1.4 system-ui,sans-serif;padding-bottom:84px}
+header{padding:14px 16px 6px;display:flex;align-items:center;justify-content:space-between;gap:8px}
+h1{font-size:20px;margin:0}
+main{padding:8px 14px;max-width:640px;margin:auto}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:14px;padding:14px;margin:10px 0}
+.card h2{font-size:15px;margin:0 0 8px;color:var(--mut);font-weight:600}
+.big{font-size:28px;font-weight:700}
+.row{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 0;border-top:1px solid var(--bd)}
+.row:first-of-type{border-top:0}
+.in{color:var(--in)}.out{color:var(--out)}.warn{color:var(--warn)}.mut{color:var(--mut);font-size:13px}
+input,select,button{font:inherit;padding:10px;border-radius:10px;border:1px solid var(--bd);background:var(--bg);color:var(--tx);width:100%;margin:4px 0}
+button{background:var(--pri);color:#fff;border:0;font-weight:600;cursor:pointer}
+button.sec{background:transparent;color:var(--pri);border:1px solid var(--pri)}
+button.sm{width:auto;padding:6px 10px;font-size:13px;margin:0}
+button.del{background:transparent;color:var(--out);border:0;width:auto;padding:6px;margin:0}
+label{font-size:13px;color:var(--mut)}
+.g2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+nav{position:fixed;bottom:0;left:0;right:0;display:flex;background:var(--card);border-top:1px solid var(--bd);padding-bottom:env(safe-area-inset-bottom)}
+nav button{flex:1;background:none;color:var(--mut);border-radius:0;border:0;margin:0;font-size:12px;padding:10px 2px}
+nav button.on{color:var(--pri)}
+.bar{height:8px;background:var(--bd);border-radius:6px;overflow:hidden;margin-top:4px}
+.bar i{display:block;height:100%;background:var(--pri)}
+.alert{border-left:4px solid var(--warn)}
+.mn{display:flex;align-items:center;gap:6px}.mn button{width:auto;padding:6px 12px;margin:0}
+</style>
+</head>
+<body>
+<header><h1>💰 Mis Finanzas</h1><div class="mn" id="mn"></div></header>
+<main id="view"></main>
+<nav>
+<button data-t="resumen" onclick="go('resumen')">📊<br>Resumen</button>
+<button data-t="mov" onclick="go('mov')">🧾<br>Movimientos</button>
+<button data-t="pagos" onclick="go('pagos')">⏰<br>Pagos</button>
+<button data-t="sitp" onclick="go('sitp')">🚌<br>SITP</button>
+<button data-t="alcanza" onclick="go('alcanza')">🤔<br>¿Me alcanza?</button>
+</nav>
+<script>
+const $=s=>document.querySelector(s);
+const fmt=n=>new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',maximumFractionDigits:0}).format(n||0);
+const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,6);
+const pad=n=>String(n).padStart(2,'0');
+const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const KEY='finanzas-v1';
+function load(){try{const s=JSON.parse(localStorage.getItem(KEY));if(s)return s}catch(e){}return{tx:[],bills:[],sitp:{balance:0,fare:0,log:[]},notified:{}}}
+let S=load();
+function persist(){localStorage.setItem(KEY,JSON.stringify(S))}
+function save(){persist();render()}
+const todayStr=()=>{const d=new Date();return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`};
+const curYM=()=>todayStr().slice(0,7);
+let month=curYM(),tab='resumen';
+const INC=['Sueldo','Otros ingresos'],OUT=['Comida','Transporte','Servicios','Arriendo','Salud','Ocio','Deudas','Pagos','Otros'];
+const catOpts=t=>(t==='in'?INC:OUT).map(c=>`<option>${c}</option>`).join('');
+function setCats(f){f.elements.cat.innerHTML=catOpts(f.elements.type.value)}
+const monthLabel=ym=>{const[y,m]=ym.split('-').map(Number);return new Date(y,m-1,1).toLocaleDateString('es-CO',{month:'long',year:'numeric'})};
+function shiftMonth(d){const[y,m]=month.split('-').map(Number);const dt=new Date(y,m-1+d,1);month=`${dt.getFullYear()}-${pad(dt.getMonth()+1)}`;render()}
+function go(t){tab=t;render();scrollTo(0,0)}
+const daysUntil=d=>Math.round((new Date(d+'T00:00')-new Date(todayStr()+'T00:00'))/864e5);
+
+/* ---- pagos ---- */
+function dueIn(b,ym){if(b.kind==='unico')return b.date;const[y,m]=ym.split('-').map(Number);const last=new Date(y,m,0).getDate();return `${ym}-${pad(Math.min(b.day,last))}`}
+function isPaid(b,ym){return b.kind==='unico'?!!b.paid:(b.paidMonths||[]).includes(ym)}
+function pendingIn(ym){return S.bills.filter(b=>b.kind==='unico'?b.date.slice(0,7)===ym&&!b.paid:ym>=b.start&&!isPaid(b,ym))}
+function nextDue(b){
+  if(b.kind==='unico')return b.paid?null:b.date;
+  let ym=curYM();
+  if(isPaid(b,ym)){const[y,m]=ym.split('-').map(Number);const dt=new Date(y,m,1);ym=`${dt.getFullYear()}-${pad(dt.getMonth()+1)}`}
+  return dueIn(b,ym);
+}
+function dueSoon(){return S.bills.map(b=>({b,d:nextDue(b)})).filter(x=>x.d&&daysUntil(x.d)<=x.b.remind).sort((a,c)=>a.d.localeCompare(c.d))}
+function when(d){const n=daysUntil(d);return n<0?`vencido hace ${-n} d`:n===0?'hoy':n===1?'mañana':`en ${n} días`}
+
+function addBill(e){e.preventDefault();const f=e.target.elements;
+  const kind=f.kind.value,amount=+f.amount.value,name=f.name.value.trim();
+  if(!name||!(amount>0))return false;
+  const b={id:uid(),name,amount,kind,remind:+f.remind.value||0,start:curYM(),paidMonths:[]};
+  if(kind==='mensual'){b.day=+f.day.value;if(!(b.day>=1&&b.day<=31)){alert('Pon un día del mes entre 1 y 31');return false}}
+  else{b.date=f.date.value;if(!b.date){alert('Elige la fecha del pago');return false}b.paid=false}
+  S.bills.push(b);save();return false}
+function payBill(id){const b=S.bills.find(x=>x.id===id);const d=nextDue(b);if(!d)return;const ym=d.slice(0,7);
+  S.tx.push({id:uid(),type:'out',amount:b.amount,cat:'Pagos',date:todayStr(),note:b.name,billId:id,ym});
+  if(b.kind==='unico')b.paid=true;else b.paidMonths.push(ym);save()}
+function undoPay(id){const b=S.bills.find(x=>x.id===id);let ym;
+  if(b.kind==='unico'){ym=b.date.slice(0,7);b.paid=false}else{ym=b.paidMonths.pop();if(!ym)return}
+  const i=S.tx.findIndex(t=>t.billId===id&&t.ym===ym);if(i>=0)S.tx.splice(i,1);save()}
+function delBill(id){if(!confirm('¿Eliminar este pago?'))return;S.bills=S.bills.filter(b=>b.id!==id);save()}
+
+/* ---- movimientos ---- */
+function addTx(e){e.preventDefault();const f=e.target.elements;const amount=+f.amount.value;if(!(amount>0))return false;
+  S.tx.push({id:uid(),type:f.type.value,amount,cat:f.cat.value,date:f.date.value||todayStr(),note:f.note.value.trim()});save();return false}
+function delTx(id){const t=S.tx.find(x=>x.id===id);if(t&&t.billId&&!confirm('Este movimiento viene de un pago marcado. ¿Eliminarlo igual?'))return;S.tx=S.tx.filter(x=>x.id!==id);save()}
+const sum=(ym,type)=>S.tx.filter(t=>t.type===type&&t.date.slice(0,7)===ym).reduce((a,t)=>a+t.amount,0);
+
+/* ---- SITP ---- */
+function sitpTrip(){const s=S.sitp;if(!(s.fare>0)){alert('Primero guarda el valor del pasaje');return}
+  s.balance-=s.fare;s.log.unshift({id:uid(),date:todayStr(),kind:'Viaje',amount:-s.fare});s.log=s.log.slice(0,40);save()}
+function sitpFare(e){e.preventDefault();S.sitp.fare=+e.target.elements.fare.value||0;save();return false}
+function sitpRecharge(e){e.preventDefault();const f=e.target.elements;const a=+f.amount.value;if(!(a>0))return false;
+  S.sitp.balance+=a;S.sitp.log.unshift({id:uid(),date:todayStr(),kind:'Recarga',amount:a});S.sitp.log=S.sitp.log.slice(0,40);
+  if(f.gasto.checked)S.tx.push({id:uid(),type:'out',amount:a,cat:'Transporte',date:todayStr(),note:'Recarga SITP'});save();return false}
+function sitpSet(e){e.preventDefault();const v=e.target.elements.bal.value;if(v==='')return false;const n=+v;
+  S.sitp.log.unshift({id:uid(),date:todayStr(),kind:'Ajuste',amount:n-S.sitp.balance});S.sitp.balance=n;save();return false}
+
+/* ---- respaldo, calendario, avisos ---- */
+function download(name,text,type){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([text],{type}));a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),2000)}
+function exportJSON(){download(`finanzas-respaldo-${todayStr()}.json`,JSON.stringify(S),'application/json')}
+function importJSON(inp){const f=inp.files[0];if(!f)return;const r=new FileReader();r.onload=()=>{try{const d=JSON.parse(r.result);if(!d.tx||!d.bills)throw 0;if(confirm('Esto reemplaza los datos actuales. ¿Continuar?')){S=d;save()}}catch(e){alert('Archivo no válido')}};r.readAsText(f)}
+function exportICS(){
+  const L=['BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//MisFinanzas//ES'];
+  const stamp=new Date().toISOString().replace(/[-:]/g,'').split('.')[0]+'Z';
+  S.bills.forEach(b=>{const d=nextDue(b)||(b.kind==='unico'?b.date:null);if(!d)return;
+    const m=b.remind*1440-540;
+    L.push('BEGIN:VEVENT',`UID:${b.id}@misfinanzas`,`DTSTAMP:${stamp}`,`DTSTART;VALUE=DATE:${d.replace(/-/g,'')}`,
+      `SUMMARY:Pagar ${b.name.replace(/[,;\n]/g,' ')} (${fmt(b.amount)})`);
+    if(b.kind==='mensual')L.push('RRULE:FREQ=MONTHLY');
+    L.push('BEGIN:VALARM','ACTION:DISPLAY','DESCRIPTION:Recordatorio de pago',`TRIGGER:${m>=0?'-':''}PT${Math.abs(m)}M`,'END:VALARM','END:VEVENT')});
+  L.push('END:VCALENDAR');download('pagos.ics',L.join('\r\n'),'text/calendar')}
+async function enableNotifs(){if(!('Notification'in window)){alert('Este navegador no soporta avisos');return}
+  const p=await Notification.requestPermission();if(p==='granted')checkNotifs();render()}
+async function checkNotifs(){
+  if(!('Notification'in window)||Notification.permission!=='granted')return;
+  const reg=await navigator.serviceWorker?.getRegistration();let ch=false;
+  for(const x of dueSoon()){const k=`${x.b.id}|${x.d}|${todayStr()}`;if(S.notified[k])continue;
+    S.notified[k]=1;ch=true;const opts={body:`${fmt(x.b.amount)} · ${when(x.d)}`,icon:'icon-192.png',tag:k};
+    try{reg?reg.showNotification(`Pagar ${x.b.name}`,opts):new Notification(`Pagar ${x.b.name}`,opts)}catch(e){}}
+  if(ch){const keep={};Object.keys(S.notified).slice(-200).forEach(k=>keep[k]=1);S.notified=keep;persist()}}
+
+/* ---- vistas ---- */
+const mnav=()=>`<button class="sec" onclick="shiftMonth(-1)">‹</button><b style="text-transform:capitalize;font-size:14px">${monthLabel(month)}</b><button class="sec" onclick="shiftMonth(1)">›</button>`;
+const V={
+resumen(){
+  const inc=sum(month,'in'),out=sum(month,'out'),pend=pendingIn(month),pt=pend.reduce((a,b)=>a+b.amount,0),av=inc-out-pt;
+  const cats={};S.tx.filter(t=>t.type==='out'&&t.date.slice(0,7)===month).forEach(t=>cats[t.cat]=(cats[t.cat]||0)+t.amount);
+  const cl=Object.entries(cats).sort((a,b)=>b[1]-a[1]);
+  const soon=dueSoon();
+  return `${soon.length?`<div class="card alert"><h2>⏰ Pagos próximos</h2>${soon.map(x=>`<div class="row"><span>${esc(x.b.name)}<br><span class="mut">${when(x.d)}</span></span><b>${fmt(x.b.amount)}</b></div>`).join('')}</div>`:''}
+  <div class="card"><h2>Disponible este mes</h2><div class="big ${av>=0?'in':'out'}">${fmt(av)}</div>
+  <div class="mut">Ingresos − gastos − pagos que aún faltan</div></div>
+  <div class="g2"><div class="card"><h2>Entró</h2><b class="in">${fmt(inc)}</b></div><div class="card"><h2>Salió</h2><b class="out">${fmt(out)}</b></div></div>
+  <div class="card"><h2>Pagos pendientes del mes</h2>${pend.length?pend.map(b=>`<div class="row"><span>${esc(b.name)} <span class="mut">· día ${dueIn(b,month).slice(8)}</span></span><b>${fmt(b.amount)}</b></div>`).join('')+`<div class="row"><b>Total</b><b>${fmt(pt)}</b></div>`:'<span class="mut">Nada pendiente 🎉</span>'}</div>
+  <div class="card"><h2>Gastos por categoría</h2>${cl.length?cl.map(([c,v])=>`<div><div class="row" style="border:0;padding:4px 0"><span>${esc(c)}</span><b>${fmt(v)}</b></div><div class="bar"><i style="width:${Math.round(v/out*100)}%"></i></div></div>`).join(''):'<span class="mut">Sin gastos este mes</span>'}</div>`},
+mov(){
+  const list=S.tx.filter(t=>t.date.slice(0,7)===month).sort((a,b)=>b.date.localeCompare(a.date));
+  return `<div class="card"><h2>Nuevo movimiento</h2><form onsubmit="return addTx(event)">
+  <div class="g2"><select name="type" onchange="setCats(this.form)"><option value="out">Gasto</option><option value="in">Ingreso</option></select>
+  <select name="cat">${catOpts('out')}</select></div>
+  <input name="amount" type="number" inputmode="numeric" min="1" placeholder="Valor (COP)" required>
+  <div class="g2"><input name="date" type="date" value="${todayStr()}"><input name="note" placeholder="Nota (opcional)"></div>
+  <button>Guardar</button></form></div>
+  <div class="card"><h2>Movimientos del mes</h2>${list.length?list.map(t=>`<div class="row"><span>${esc(t.note||t.cat)}<br><span class="mut">${t.date.slice(5)} · ${esc(t.cat)}</span></span>
+  <span><b class="${t.type}">${t.type==='in'?'+':'−'}${fmt(t.amount)}</b> <button class="del" onclick="delTx('${t.id}')">✕</button></span></div>`).join(''):'<span class="mut">Aún no hay movimientos</span>'}</div>`},
+pagos(){
+  const sorted=S.bills.map(b=>({b,d:nextDue(b)})).sort((a,c)=>(a.d||'9').localeCompare(c.d||'9'));
+  const perm='Notification'in window?Notification.permission:'no';
+  return `<div class="card"><h2>Nuevo pago</h2><form onsubmit="return addBill(event)">
+  <input name="name" placeholder="Nombre (ej. Arriendo, Internet)" required>
+  <input name="amount" type="number" inputmode="numeric" min="1" placeholder="Valor (COP)" required>
+  <select name="kind"><option value="mensual">Se repite cada mes</option><option value="unico">Pago único</option></select>
+  <div class="g2"><div><label>Día del mes (si es mensual)</label><input name="day" type="number" min="1" max="31" placeholder="Ej. 5"></div>
+  <div><label>Fecha (si es único)</label><input name="date" type="date"></div></div>
+  <label>Avisarme con cuántos días de anticipación</label><input name="remind" type="number" min="0" value="3">
+  <button>Agregar pago</button></form></div>
+  <div class="card"><h2>Mis pagos</h2>${sorted.length?sorted.map(({b,d})=>`<div class="row" style="align-items:flex-start"><span>${esc(b.name)}<br><span class="mut">${b.kind==='mensual'?'Mensual · ':'Único · '}${d?`${d} (${when(d)})`:'Pagado ✓'}</span></span>
+  <span style="text-align:right"><b>${fmt(b.amount)}</b><br>${d?`<button class="sm" onclick="payBill('${b.id}')">Pagado</button> `:''}${(b.kind==='unico'?b.paid:b.paidMonths.length)?`<button class="sm sec" onclick="undoPay('${b.id}')">Deshacer</button> `:''}<button class="del" onclick="delBill('${b.id}')">✕</button></span></div>`).join(''):'<span class="mut">Aún no tienes pagos</span>'}</div>
+  <div class="card"><h2>Recordatorios</h2>
+  <p class="mut" style="margin-top:0">Los avisos de la app salen cuando la abres. Para que el celular te avise aunque la app esté cerrada, pasa los pagos a tu calendario:</p>
+  <button onclick="exportICS()">📅 Exportar a mi calendario (.ics)</button>
+  ${perm==='default'?'<button class="sec" onclick="enableNotifs()">🔔 Activar avisos al abrir la app</button>':perm==='granted'?'<div class="mut">🔔 Avisos al abrir la app: activados</div>':''}</div>`},
+sitp(){
+  const s=S.sitp,trips=s.fare>0?Math.floor(s.balance/s.fare):null;
+  return `<div class="card"><h2>Saldo tarjeta SITP</h2><div class="big ${s.balance>=0?'':'out'}">${fmt(s.balance)}</div>
+  <div class="mut">${trips!==null?`Te alcanza para ~${Math.max(trips,0)} viajes`:'Guarda el valor del pasaje para ver cuántos viajes te alcanzan'}</div>
+  <button onclick="sitpTrip()" style="margin-top:10px">🚌 Registrar un viaje${s.fare>0?` (−${fmt(s.fare)})`:''}</button></div>
+  <div class="card"><h2>Valor del pasaje</h2><form onsubmit="return sitpFare(event)"><div class="g2"><input name="fare" type="number" inputmode="numeric" min="0" value="${s.fare||''}" placeholder="Ej. 3500"><button>Guardar</button></div></form></div>
+  <div class="card"><h2>Recarga</h2><form onsubmit="return sitpRecharge(event)"><input name="amount" type="number" inputmode="numeric" min="1" placeholder="Valor recargado" required>
+  <label><input type="checkbox" name="gasto" checked style="width:auto;margin-right:6px">Contar como gasto de transporte</label><button>Registrar recarga</button></form></div>
+  <div class="card"><h2>Corregir saldo (según la tarjeta)</h2><form onsubmit="return sitpSet(event)"><div class="g2"><input name="bal" type="number" inputmode="numeric" placeholder="Saldo real"><button class="sec">Ajustar</button></div></form></div>
+  <div class="card"><h2>Historial</h2>${s.log.length?s.log.slice(0,15).map(l=>`<div class="row"><span>${l.kind}<br><span class="mut">${l.date}</span></span><b class="${l.amount>=0?'in':'out'}">${l.amount>=0?'+':''}${fmt(l.amount)}</b></div>`).join(''):'<span class="mut">Sin registros</span>'}</div>`},
+alcanza(){
+  const ym=curYM(),inc=sum(ym,'in'),out=sum(ym,'out'),pt=pendingIn(ym).reduce((a,b)=>a+b.amount,0),av=inc-out-pt;
+  return `<div class="card"><h2>Lo que te queda este mes (${monthLabel(ym)})</h2><div class="big ${av>=0?'in':'out'}">${fmt(av)}</div>
+  <div class="mut">Ya descontando gastos hechos y pagos pendientes</div></div>
+  <div class="card"><h2>¿Me alcanza para…?</h2>
+  <input id="q-amt" type="number" inputmode="numeric" min="1" placeholder="Valor de la compra" oninput="calc()">
+  <input id="q-cuo" type="number" min="1" value="1" placeholder="Número de cuotas" oninput="calc()">
+  <div id="q-res" class="mut" style="margin-top:8px">Escribe un valor para ver el resultado.</div></div>`}
+};
+function calc(){
+  const ym=curYM(),av=sum(ym,'in')-sum(ym,'out')-pendingIn(ym).reduce((a,b)=>a+b.amount,0);
+  const a=+$('#q-amt').value,c=Math.max(1,+$('#q-cuo').value||1),r=$('#q-res');
+  if(!(a>0)){r.className='mut';r.textContent='Escribe un valor para ver el resultado.';return}
+  const cuota=a/c,left=av-cuota;
+  r.className=left>=0?'in':'out';
+  r.innerHTML=c===1?(left>=0?`✅ Sí te alcanza. Te quedarían ${fmt(left)} este mes.`:`❌ No te alcanza este mes: te faltarían ${fmt(-left)}.`)
+   :(left>=0?`✅ La cuota de ${fmt(cuota)} cabe este mes. Te quedarían ${fmt(left)} después de la primera cuota.`:`❌ La cuota de ${fmt(cuota)} no cabe este mes: faltarían ${fmt(-left)}. Prueba con más cuotas.`)}
+function render(){
+  $('#view').innerHTML=V[tab]();
+  $('#mn').innerHTML=(tab==='resumen'||tab==='mov')?mnav():'';
+  document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('on',b.dataset.t===tab));
+  if(tab==='resumen'||tab==='mov'||tab==='pagos'){}
+}
+/* respaldo extra al final de Resumen */
+const _r=V.resumen;V.resumen=()=>_r()+`<div class="card"><h2>Respaldo de datos</h2><p class="mut" style="margin-top:0">Tus datos viven solo en este celular. Guarda un respaldo de vez en cuando.</p>
+<div class="g2"><button class="sec" onclick="exportJSON()">Descargar</button><button class="sec" onclick="document.getElementById('imp').click()">Restaurar</button></div>
+<input id="imp" type="file" accept=".json" hidden onchange="importJSON(this)"></div>`;
+render();
+if('serviceWorker'in navigator)navigator.serviceWorker.register('sw.js').then(()=>checkNotifs()).catch(()=>{});
+document.addEventListener('visibilitychange',()=>{if(!document.hidden){checkNotifs();render()}});
+</script>
+</body>
+</html>
